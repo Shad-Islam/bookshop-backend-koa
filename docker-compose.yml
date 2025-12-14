@@ -1,0 +1,23 @@
+services:
+  api:
+    build: .
+    container_name: bookshop-backend
+    ports:
+      - "4000:4000"
+    env_file:
+      - .env
+    depends_on:
+      - mongo
+    volumes:
+      - .:/usr/src/app
+      - /usr/src/app/node_modules
+    command: npm run dev
+  mongo:
+    image: mongo:latest
+    container_name: bookshop-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+volumes:
+  mongo-data:
