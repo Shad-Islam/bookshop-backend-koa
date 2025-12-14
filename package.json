@@ -1,0 +1,19 @@
+{
+  "name": "bookshop-backend-koa",
+  "version": "1.0.0",
+  "description": "",
+  "license": "ISC",
+  "author": "shad",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@koa/router": "^15.1.0",
+    "dotenv": "^17.2.3",
+    "koa": "^3.1.1",
+    "koa-bodyparser": "^4.4.1",
+    "koa2-cors": "^2.0.6"
+  }
+}
