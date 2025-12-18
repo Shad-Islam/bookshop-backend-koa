@@ -13,4 +13,7 @@ router.get("/health", (ctx) => {
   ctx.body = { ok: true, message: "API is healthy" };
 });
 
+const authRoutes = require("./auth.routes");
+router.use(authRoutes.routes()).use(authRoutes.allowedMethods());
+
 module.exports = router;
