@@ -69,4 +69,38 @@ router.post("/auth/login", async (ctx, next) => {
   })(ctx, next);
 });
 
+// Google OAuth start
+router.get(
+  "/auth/google",
+  passport.authenticate("google", { scope: ["profile", "email"] })
+);
+
+// Google OAuth callback
+router.get(
+  "/oauth2/redirect/google",
+  passport.authenticate("google", {
+    session: false,
+    failureRedirect: "/auth/failed",
+  }),
+  async (ctx) => {
+    const user = ctx.state.user;
+    ctx.body = {
+      message: "Google login successful.",
+      token: signToken(user),
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+      },
+    };
+  }
+);
+
+// optional fail route
+router.get("/auth/failed", (ctx) => {
+  ctx.status = 401;
+  ctx.body = { message: "Authentication failed" };
+});
+
 module.exports = router;
