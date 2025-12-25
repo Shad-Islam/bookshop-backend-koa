@@ -2,6 +2,7 @@ const bcrypt = require("bcrypt");
 const passport = require("koa-passport");
 const LocalStrategy = require("passport-local").Strategy;
 const GoogleStrategy = require("passport-google-oauth20").Strategy;
+const FacebookStrategy = require("passport-facebook").Strategy;
 
 const User = require("../models/user.model");
 
@@ -68,6 +69,45 @@ passport.use(
           user.googleId = googleId;
           if (!user.photo)
             user.photo = profile.photos?.[0]?.value || user.photo;
+          await user.save();
+        }
+
+        return done(null, user);
+      } catch (err) {
+        return done(err);
+      }
+    }
+  )
+);
+
+// Facebook Strategy
+passport.use(
+  new FacebookStrategy(
+    {
+      clientID: process.env.FACEBOOK_APP_ID,
+      clientSecret: process.env.FACEBOOK_APP_SECRET,
+      callbackURL: process.env.FACEBOOK_CALLBACK_URL,
+      profileFields: ["id", "displayName", "photos", "email"],
+    },
+    async (accessToken, refreshToken, profile, done) => {
+      try {
+        const facebookId = profile.id;
+        const email = profile.emails?.[0]?.value?.toLowerCase() || null;
+
+        let user = await User.findOne({ facebookId });
+        if (!user && email) user = await User.findOne({ email });
+
+        if (!user) {
+          user = await User.create({
+            provider: "facebook",
+            facebookId,
+            email,
+            name: profile.displayName || null,
+            photo: profile.photos?.[0]?.value || null,
+          });
+        } else if (!user.facebookId) {
+          user.facebookId = facebookId;
+          if (!user.photo) user.photo = profile.photos?.[0]?.value || user.photo;
           await user.save();
         }
 

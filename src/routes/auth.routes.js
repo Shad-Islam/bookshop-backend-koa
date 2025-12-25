@@ -97,6 +97,35 @@ router.get(
   }
 );
 
+// Facebook OAuth start
+router.get(
+  "/auth/facebook",
+  passport.authenticate("facebook")
+);
+
+// Facebook OAuth callback
+router.get(
+  "/oauth2/redirect/facebook",
+  passport.authenticate("facebook", {
+    session: false,
+    failureRedirect: "/auth/failed",
+  }),
+  async (ctx) => {
+    const user = ctx.state.user;
+
+    ctx.body = {
+      message: "Facebook login successful.",
+      token: signToken(user),
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+      },
+    };
+  }
+);
+
 // optional fail route
 router.get("/auth/failed", (ctx) => {
   ctx.status = 401;
