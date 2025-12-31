@@ -100,7 +100,7 @@ router.get(
 // Facebook OAuth start
 router.get(
   "/auth/facebook",
-  passport.authenticate("facebook")
+  passport.authenticate("facebook", { scope: "email", authType: "rerequest" })
 );
 
 // Facebook OAuth callback
