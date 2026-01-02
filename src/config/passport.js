@@ -1,91 +1,13 @@
 const bcrypt = require("bcrypt");
 const passport = require("koa-passport");
 const LocalStrategy = require("passport-local").Strategy;
-const GoogleStrategy = require("passport-google-oauth20").Strategy;
 const FacebookStrategy = require("passport-facebook").Strategy;
+const GoogleStrategy = require("passport-google-oauth20").Strategy;
 
 const User = require("../models/user.model");
+const AuthLink = require("../models/authLink.model");
 
-function normalizeEmail(value) {
-  if (!value) return null;
-  return String(value).toLowerCase().trim() || null;
-}
-
-function pickProfileEmail(profile) {
-  // Google uses profile.emails; Facebook sometimes puts it in profile._json.email
-  return normalizeEmail(
-    profile?.emails?.[0]?.value ||
-      profile?._json?.email ||
-      profile?._json?.email_address ||
-      null
-  );
-}
-
-async function findOrLinkOAuthUser({
-  provider,
-  providerIdField,
-  providerId,
-  email,
-  name,
-  photo,
-}) {
-  // 1) already linked by provider id
-  let user = await User.findOne({ [providerIdField]: providerId });
-
-  // 2) if not, try link by email
-  if (!user && email) {
-    user = await User.findOne({ email });
-  }
-
-  if (!user) {
-    // 3) create new user
-    user = await User.create({
-      provider,
-      [providerIdField]: providerId,
-      email,
-      name: name || null,
-      photo: photo || null,
-    });
-    return user;
-  }
-
-  // 4) update/link missing fields on existing user
-  let changed = false;
-
-  // link provider id (googleId/facebookId) into existing account
-  if (!user[providerIdField]) {
-    user[providerIdField] = providerId;
-    changed = true;
-  }
-
-  // Fill email later if it was missing before
-  if (!user.email && email) {
-    user.email = email;
-    changed = true;
-  }
-
-  // Fill missing name/photo
-  if (!user.name && name) {
-    user.name = name;
-    changed = true;
-  }
-
-  if (!user.photo && photo) {
-    user.photo = photo;
-    changed = true;
-  }
-
-  // Keep original provider if it already exists (ex: local). If missing, set it.
-  if (!user.provider && provider) {
-    user.provider = provider;
-    changed = true;
-  }
-
-  if (changed) await user.save();
-  return user;
-}
-
-// Only needed for session support (OAuth later)
+// for future session usage (even if session:false now)
 passport.serializeUser((user, done) => done(null, user._id));
 passport.deserializeUser(async (id, done) => {
   try {
@@ -96,20 +18,72 @@ passport.deserializeUser(async (id, done) => {
   }
 });
 
-// Local strategy: email + password
+// helper: create/get auth link doc
+async function getOrCreateAuthLink(userId) {
+  let link = await AuthLink.findOne({ userId });
+  if (!link) link = await AuthLink.create({ userId, accounts: {} });
+  return link;
+}
+
+// helper: update missing fields in User + AuthLink
+async function updateMissingProfile({ user, link, provider, email, name, photo, providerId }) {
+  let changedUser = false;
+  let changedLink = false;
+
+  if (email && !user.email) {
+    user.email = email;
+    changedUser = true;
+  }
+  if (name && !user.name) {
+    user.name = name;
+    changedUser = true;
+  }
+  if (photo && !user.photo) {
+    user.photo = photo;
+    changedUser = true;
+  }
+
+  if (!link.accounts) link.accounts = {};
+  if (!link.accounts[provider]) link.accounts[provider] = {};
+
+  if (providerId && !link.accounts[provider].providerId) {
+    link.accounts[provider].providerId = providerId;
+    changedLink = true;
+  }
+  if (email && !link.accounts[provider].email) {
+    link.accounts[provider].email = email;
+    changedLink = true;
+  }
+  if (photo && !link.accounts[provider].photo) {
+    link.accounts[provider].photo = photo;
+    changedLink = true;
+  }
+  if (!link.accounts[provider].linkedAt) {
+    link.accounts[provider].linkedAt = new Date();
+    changedLink = true;
+  }
+
+  if (changedUser) await user.save();
+  if (changedLink) await link.save();
+}
+
+// -------------------- LOCAL STRATEGY --------------------
 passport.use(
   new LocalStrategy(
     { usernameField: "email", passwordField: "password" },
     async (email, password, done) => {
       try {
         const normalizedEmail = (email || "").toLowerCase().trim();
+
         const user = await User.findOne({ email: normalizedEmail });
+        if (!user) return done(null, false, { message: "Invalid credentials" });
 
-        if (!user || !user.passwordHash) {
-          return done(null, false, { message: "Invalid credentials" });
-        }
+        const link = await AuthLink.findOne({ userId: user._id });
+        const hash = link?.accounts?.local?.passwordHash;
 
-        const ok = await bcrypt.compare(password, user.passwordHash);
+        if (!hash) return done(null, false, { message: "Invalid credentials" });
+
+        const ok = await bcrypt.compare(password, hash);
         if (!ok) return done(null, false, { message: "Invalid credentials" });
 
         return done(null, user);
@@ -120,7 +94,7 @@ passport.use(
   )
 );
 
-// Google Strategy
+// -------------------- GOOGLE STRATEGY --------------------
 passport.use(
   new GoogleStrategy(
     {
@@ -131,16 +105,59 @@ passport.use(
     async (accessToken, refreshToken, profile, done) => {
       try {
         const googleId = profile.id;
-        const email = pickProfileEmail(profile);
+        const email = profile.emails?.[0]?.value?.toLowerCase() || null;
+        const name = profile.displayName || null;
+        const photo = profile.photos?.[0]?.value || null;
 
-        const user = await findOrLinkOAuthUser({
+        // 1) find by linked googleId inside auth_links
+        let link = await AuthLink.findOne({ "accounts.google.providerId": googleId });
+
+        let user = null;
+
+        if (link) {
+          user = await User.findById(link.userId);
+          if (!user) {
+            // edge case: link exists but user deleted
+            await AuthLink.deleteOne({ _id: link._id });
+            link = null;
+          }
+        }
+
+        // 2) if not found by googleId, try link by email in users
+        if (!user && email) {
+          user = await User.findOne({ email });
+          if (user) link = await getOrCreateAuthLink(user._id);
+        }
+
+        // 3) if still not found, create new user + link
+        if (!user) {
+          user = await User.create({
+            name,
+            email,
+            photo,
+            primaryProvider: "google",
+            primaryProviderId: googleId,
+          });
+          link = await getOrCreateAuthLink(user._id);
+        }
+
+        // ensure google account is linked inside the same auth_links doc
+        await updateMissingProfile({
+          user,
+          link,
           provider: "google",
-          providerIdField: "googleId",
           providerId: googleId,
           email,
-          name: profile.displayName || null,
-          photo: profile.photos?.[0]?.value || null,
+          name,
+          photo,
         });
+
+        // also ensure primaryProvider is set only if missing
+        if (!user.primaryProvider) {
+          user.primaryProvider = "google";
+          user.primaryProviderId = googleId;
+          await user.save();
+        }
 
         return done(null, user);
       } catch (err) {
@@ -150,7 +167,7 @@ passport.use(
   )
 );
 
-// Facebook Strategy
+// -------------------- FACEBOOK STRATEGY --------------------
 passport.use(
   new FacebookStrategy(
     {
@@ -162,16 +179,55 @@ passport.use(
     async (accessToken, refreshToken, profile, done) => {
       try {
         const facebookId = profile.id;
-        const email = pickProfileEmail(profile);
+        const email = profile.emails?.[0]?.value?.toLowerCase() || null;
+        const name = profile.displayName || null;
+        const photo = profile.photos?.[0]?.value || null;
 
-        const user = await findOrLinkOAuthUser({
+        // 1) find by linked facebookId inside auth_links
+        let link = await AuthLink.findOne({ "accounts.facebook.providerId": facebookId });
+        let user = null;
+
+        if (link) {
+          user = await User.findById(link.userId);
+          if (!user) {
+            await AuthLink.deleteOne({ _id: link._id });
+            link = null;
+          }
+        }
+
+        // 2) if not found by facebookId, try link by email
+        if (!user && email) {
+          user = await User.findOne({ email });
+          if (user) link = await getOrCreateAuthLink(user._id);
+        }
+
+        // 3) if still not found, create new user + link
+        if (!user) {
+          user = await User.create({
+            name,
+            email,
+            photo,
+            primaryProvider: "facebook",
+            primaryProviderId: facebookId,
+          });
+          link = await getOrCreateAuthLink(user._id);
+        }
+
+        await updateMissingProfile({
+          user,
+          link,
           provider: "facebook",
-          providerIdField: "facebookId",
           providerId: facebookId,
           email,
-          name: profile.displayName || null,
-          photo: profile.photos?.[0]?.value || null,
+          name,
+          photo,
         });
+
+        if (!user.primaryProvider) {
+          user.primaryProvider = "facebook";
+          user.primaryProviderId = facebookId;
+          await user.save();
+        }
 
         return done(null, user);
       } catch (err) {

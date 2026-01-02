@@ -1,8 +1,10 @@
-const Router = require("@koa/router");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
+const Router = require("@koa/router");
 const passport = require("koa-passport");
+
 const User = require("../models/user.model");
+const AuthLink = require("../models/authLink.model");
 
 const router = new Router();
 
@@ -23,56 +25,39 @@ router.post("/auth/register", async (ctx) => {
     return;
   }
 
-  if (typeof password !== "string" || password.length < 6) {
-    ctx.status = 400;
-    ctx.body = { message: "Password must be at least 6 characters." };
-    return;
-  }
-
   const normalizedEmail = email.toLowerCase().trim();
 
-  // If user already exists (from Google/Facebook), link local credentials to the SAME user
-  const existingUser = await User.findOne({ email: normalizedEmail });
-  if (existingUser) {
-    // If they already have a password, this is a true duplicate registration
-    if (existingUser.passwordHash) {
-      ctx.status = 409;
-      ctx.body = { message: "Email is already registered." };
-      return;
+  let user = await User.findOne({ email: normalizedEmail });
+
+  // If user doesn't exist, create it as local-first user
+  if (!user) {
+    user = await User.create({
+      name: name || null,
+      email: normalizedEmail,
+      primaryProvider: "local",
+      primaryProviderId: normalizedEmail,
+    });
+  } else {
+    // If user exists from OAuth, optionally fill name if empty
+    if (!user.name && name) {
+      user.name = name;
+      await user.save();
     }
-
-    const passwordHash = await bcrypt.hash(password, 10);
-
-    // Link local login to the existing account
-    existingUser.passwordHash = passwordHash;
-    if (!existingUser.name && name) existingUser.name = name;
-    // Keep existing provider (google/facebook) if present; don't overwrite it.
-
-    await existingUser.save();
-
-    ctx.status = 200;
-    ctx.body = {
-      message: "Local credentials added successfully.",
-      token: signToken(existingUser),
-      user: {
-        id: existingUser._id,
-        name: existingUser.name,
-        email: existingUser.email,
-        role: existingUser.role,
-      },
-    };
-    return;
   }
 
-  // Otherwise, create a new local user
   const passwordHash = await bcrypt.hash(password, 10);
 
-  const user = await User.create({
-    provider: "local",
-    name: name || null,
-    email: normalizedEmail,
-    passwordHash,
-  });
+  let link = await AuthLink.findOne({ userId: user._id });
+  if (!link) link = await AuthLink.create({ userId: user._id, accounts: {} });
+
+  if (!link.accounts) link.accounts = {};
+  if (!link.accounts.local) link.accounts.local = {};
+
+  link.accounts.local.email = normalizedEmail;
+  link.accounts.local.passwordHash = passwordHash;
+  link.accounts.local.linkedAt = new Date();
+
+  await link.save();
 
   ctx.status = 201;
   ctx.body = {
