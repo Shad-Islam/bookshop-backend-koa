@@ -3,7 +3,9 @@ const mongoose = require("mongoose");
 const userSchema = new mongoose.Schema(
   {
     name: { type: String, trim: true },
-    email: { type: String, trim: true, lowercase: true, index: true },
+
+    // unique+sparse so OAuth users can have null email, but real emails must be unique
+    email: { type: String, trim: true, lowercase: true, unique: true, sparse: true },
 
     // OAuth fields
     provider: {
@@ -19,6 +21,7 @@ const userSchema = new mongoose.Schema(
       },
     },
 
+    // unique+sparse so multiple nulls are allowed
     googleId: { type: String, unique: true, sparse: true },
     facebookId: { type: String, unique: true, sparse: true },
 
@@ -26,9 +29,5 @@ const userSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
-
-userSchema.index({ email: 1 }, { unique: true, sparse: true });
-userSchema.index({ googleId: 1 }, { unique: true, sparse: true });
-userSchema.index({ facebookId: 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.model("User", userSchema);

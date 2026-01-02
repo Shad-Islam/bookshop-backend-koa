@@ -23,15 +23,48 @@ router.post("/auth/register", async (ctx) => {
     return;
   }
 
-  const normalizedEmail = email.toLowerCase().trim();
-
-  const existingUser = await User.findOne({ email: normalizedEmail });
-  if (existingUser) {
-    ctx.status = 409;
-    ctx.body = { message: "Email is already registered." };
+  if (typeof password !== "string" || password.length < 6) {
+    ctx.status = 400;
+    ctx.body = { message: "Password must be at least 6 characters." };
     return;
   }
 
+  const normalizedEmail = email.toLowerCase().trim();
+
+  // If user already exists (from Google/Facebook), link local credentials to the SAME user
+  const existingUser = await User.findOne({ email: normalizedEmail });
+  if (existingUser) {
+    // If they already have a password, this is a true duplicate registration
+    if (existingUser.passwordHash) {
+      ctx.status = 409;
+      ctx.body = { message: "Email is already registered." };
+      return;
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    // Link local login to the existing account
+    existingUser.passwordHash = passwordHash;
+    if (!existingUser.name && name) existingUser.name = name;
+    // Keep existing provider (google/facebook) if present; don't overwrite it.
+
+    await existingUser.save();
+
+    ctx.status = 200;
+    ctx.body = {
+      message: "Local credentials added successfully.",
+      token: signToken(existingUser),
+      user: {
+        id: existingUser._id,
+        name: existingUser.name,
+        email: existingUser.email,
+        role: existingUser.role,
+      },
+    };
+    return;
+  }
+
+  // Otherwise, create a new local user
   const passwordHash = await bcrypt.hash(password, 10);
 
   const user = await User.create({
@@ -49,7 +82,7 @@ router.post("/auth/register", async (ctx) => {
   };
 });
 
-/*POST /auth/login  */
+/* POST /auth/login */
 router.post("/auth/login", async (ctx, next) => {
   return passport.authenticate("local", async (err, user, info) => {
     if (err) ctx.throw(500, err.message);
@@ -97,7 +130,7 @@ router.get(
   }
 );
 
-// Facebook OAuth start
+// Facebook OAuth start (request email permission)
 router.get(
   "/auth/facebook",
   passport.authenticate("facebook", { scope: "email", authType: "rerequest" })
