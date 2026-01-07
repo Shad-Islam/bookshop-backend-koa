@@ -7,7 +7,8 @@ const session = koaSession.default || koaSession;
 const passport = require("koa-passport");
 
 const routes = require("./routes");
-const connectDb = require("./config/db");
+const { ensureIndexes } = require("./config/indexes");
+const { connectToDatabase, closeDatabase } = require("./config/db");
 
 require("./config/passport");
 
@@ -24,14 +25,37 @@ app.use(routes.routes()).use(routes.allowedMethods());
 
 const PORT = process.env.PORT || 4000;
 
-(async () => {
+async function startServer() {
   try {
-    await connectDb();
-    app.listen(PORT, () => {
+    await connectToDatabase();
+    await ensureIndexes();
+
+    const server = app.listen(PORT, () => {
       console.log(`Server is running on http://localhost:${PORT}`);
     });
-  } catch (err) {
-    console.error("Failed to start server:", err.message);
+
+    const shutdown = async () => {
+      console.log("Shutting down server...");
+      server.close(async () => {
+        try {
+          await closeDatabase();
+        } catch (e) {
+          console.error("Failed to close DB:", e);
+        }
+        process.exit(0);
+      });
+    };
+
+    process.on("SIGINT", shutdown);
+    process.on("SIGTERM", shutdown);
+  } catch (error) {
+    console.error("Failed to start server:", error);
     process.exit(1);
   }
-})();
+}
+
+startServer();
+
+app.on("error", (err, ctx) => {
+  console.error("Server error", err, ctx);
+});

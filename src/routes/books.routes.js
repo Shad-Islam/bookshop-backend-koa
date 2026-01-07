@@ -2,9 +2,11 @@ const Router = require("@koa/router");
 const path = require("path");
 const fs = require("fs");
 const multer = require("koa-multer");
+const { ObjectId } = require("mongodb");
 
-const Book = require("../models/book.model");
+const { getCollection } = require("../config/db");
 const requireAuth = require("../middleware/requireAuth");
+
 
 const router = new Router({ prefix: "/api/books" });
 
@@ -70,15 +72,22 @@ router.post("/", requireAuth, upload.single("pdf"), async (ctx) => {
         .filter(Boolean)
     : [];
 
-  const book = await Book.create({
+  const books = getCollection("books");
+  const doc = {
     title: title.trim(),
     author: author?.trim() || null,
     description: description?.trim() || null,
     tags: parsedTags,
     pdfPath: relativePdfPath,
-    createdBy: ctx.state.user.id,
-    // isActive will be true by default from schema
-  });
+    coverPath: null,
+    isActive: true,
+    createdBy: new ObjectId(ctx.state.user.id),
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+
+  const result = await books.insertOne(doc);
+  const book = { _id: result.insertedId, ...doc };
 
   ctx.status = 201;
   ctx.body = {
@@ -96,20 +105,50 @@ router.post("/", requireAuth, upload.single("pdf"), async (ctx) => {
 
 // GET /api/books (list books - meta only)
 router.get("/", async (ctx) => {
-  // This includes old docs where isActive doesn't exist yet,
-  // but excludes isActive:false
-  const books = await Book.find({ isActive: { $ne: false } })
+  const booksCol = getCollection("books");
+
+  const books = await booksCol
+    .find({ isActive: { $ne: false } })
     .sort({ createdAt: -1 })
-    .select("title author description coverPath tags createdAt updatedAt");
+    .project({
+      title: 1,
+      author: 1,
+      description: 1,
+      coverPath: 1,
+      tags: 1,
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    .toArray();
 
   ctx.body = { books };
 });
 
 // GET /api/books/:id (single book meta)
 router.get("/:id", async (ctx) => {
-  const book = await Book.findById(ctx.params.id).select(
-    "title author description coverPath tags createdAt updatedAt"
-  );
+  const booksCol = getCollection("books");
+
+  let book;
+  try {
+    book = await booksCol.findOne(
+      { _id: new ObjectId(ctx.params.id), isActive: { $ne: false } },
+      {
+        projection: {
+          title: 1,
+          author: 1,
+          description: 1,
+          coverPath: 1,
+          tags: 1,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      }
+    );
+  } catch {
+    ctx.status = 400;
+    ctx.body = { message: "Invalid book id" };
+    return;
+  }
 
   if (!book) {
     ctx.status = 404;
