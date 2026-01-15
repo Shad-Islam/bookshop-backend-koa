@@ -1,53 +1,63 @@
-const bcrypt = require("bcrypt");
 const passport = require("koa-passport");
+const bcrypt = require("bcrypt");
+
 const LocalStrategy = require("passport-local").Strategy;
-const FacebookStrategy = require("passport-facebook").Strategy;
 const GoogleStrategy = require("passport-google-oauth20").Strategy;
+const FacebookStrategy = require("passport-facebook").Strategy;
 
 const { ObjectId } = require("mongodb");
-
-const { getCollection } = require("./db");
-
-function now() {
-  return new Date();
-}
+const UsersRepo = require("../repositories/user_repo");
+const AuthService = require("../services/auth_service");
 
 function normalizeEmail(email) {
-  return (email || "").toLowerCase().trim();
+  return (email || "").toString().trim().toLowerCase();
 }
 
-// for future session usage (even if session:false now)
-passport.serializeUser((user, done) => done(null, user._id));
+// -----------------
+// Session support (optional)
+// -----------------
+passport.serializeUser((user, done) =>
+  done(null, user?._id?.toString?.() || null)
+);
+
 passport.deserializeUser(async (id, done) => {
   try {
-    const users = getCollection("users");
-    const _id =
-      typeof id === "string" && ObjectId.isValid(id) ? new ObjectId(id) : id;
-
-    const user = await users.findOne({ _id });
-    done(null, user || null);
+    if (!id || !ObjectId.isValid(id)) return done(null, null);
+    const user = await UsersRepo.findById(new ObjectId(id));
+    return done(null, user || null);
   } catch (err) {
-    done(err);
+    return done(err);
   }
 });
 
-// -------------------- LOCAL STRATEGY --------------------
+// -----------------
+// Local strategy (email + password)
+// NOTE: Requires UsersRepo to expose one of these methods:
+// - findByEmail(email)
+// - findOne({ email })
+// - findByFilter({ email })
+// If your repo uses a different name, update the lookup block below.
+// -----------------
 passport.use(
   new LocalStrategy(
     { usernameField: "email", passwordField: "password" },
     async (email, password, done) => {
       try {
-        const users = getCollection("users");
         const normalizedEmail = normalizeEmail(email);
 
-        const user = await users.findOne({ email: normalizedEmail });
-        if (!user || !user.passwordHash) {
+        let user = null;
+
+        user = await UsersRepo.findByEmail(normalizedEmail);
+        if (!user) return done(null, false, { message: "Invalid credentials" });
+
+        // Support a couple of common field names
+        const passwordHash = user.passwordHash || user.password_hash || null;
+        if (!passwordHash)
           return done(null, false, { message: "Invalid credentials" });
-        }
-        const ok = await bcrypt.compare(password, user.passwordHash);
-        if (!ok) {
-          return done(null, false, { message: "Invalid credentials" });
-        }
+
+        const ok = await bcrypt.compare(password || "", passwordHash);
+        if (!ok) return done(null, false, { message: "Invalid credentials" });
+
         return done(null, user);
       } catch (err) {
         return done(err);
@@ -56,7 +66,9 @@ passport.use(
   )
 );
 
-// -------------------- GOOGLE STRATEGY --------------------
+// -----------------
+// Google OAuth
+// -----------------
 passport.use(
   new GoogleStrategy(
     {
@@ -66,46 +78,7 @@ passport.use(
     },
     async (accessToken, refreshToken, profile, done) => {
       try {
-        const users = getCollection("users");
-
-        const googleId = profile.id;
-        const email = normalizeEmail(profile.emails?.[0]?.value);
-        const name = profile.displayName || null;
-        const photo = profile.photos?.[0]?.value || null;
-
-        let user = await users.findOne({ googleId });
-
-        if (!user && email) {
-          user = await users.findOne({ email });
-        }
-
-        if (!user) {
-          const doc = {
-            primaryProvider: "google",
-            primaryProviderId: googleId,
-            googleId,
-            email: email || null,
-            name,
-            photo,
-            role: "user",
-            createdAt: now(),
-            updatedAt: now(),
-          };
-          const result = await users.insertOne(doc);
-          user = { _id: result.insertedId, ...doc };
-        } else {
-          const $set = { updatedAt: now() };
-
-          if (!user.googleId) $set.googleId = googleId;
-          if (!user.email && email) $set.email = email;
-          if (!user.name && name) $set.name = name;
-          if (!user.photo && photo) $set.photo = photo;
-
-          if (Object.keys($set).length > 1) {
-            await users.updateOne({ _id: user._id }, { $set });
-            user = { ...user, ...$set };
-          }
-        }
+        const user = await AuthService.upsertFromGoogle(profile);
         return done(null, user);
       } catch (err) {
         return done(err);
@@ -114,7 +87,9 @@ passport.use(
   )
 );
 
-// -------------------- FACEBOOK STRATEGY --------------------
+// -----------------
+// Facebook OAuth
+// -----------------
 passport.use(
   new FacebookStrategy(
     {
@@ -125,45 +100,7 @@ passport.use(
     },
     async (accessToken, refreshToken, profile, done) => {
       try {
-        const users = getCollection("users");
-
-        const facebookId = profile.id;
-        const email = normalizeEmail(profile.emails?.[0]?.value);
-        const name = profile.displayName || null;
-        const photo = profile.photos?.[0]?.value || null;
-
-        let user = await users.findOne({ facebookId });
-
-        if (!user && email) {
-          user = await users.findOne({ email });
-        }
-
-        if (!user) {
-          const doc = {
-            primaryProvider: "facebook",
-            primaryProviderId: facebookId,
-            facebookId,
-            email: email || null,
-            name,
-            photo,
-            role: "user",
-            createdAt: now(),
-            updatedAt: now(),
-          };
-          const result = await users.insertOne(doc);
-          user = { _id: result.insertedId, ...doc };
-        } else {
-          const $set = { updatedAt: now() };
-          if (!user.email && email) $set.email = email;
-          if (!user.name && name) $set.name = name;
-          if (!user.photo && photo) $set.photo = photo;
-          if (!user.facebookId) $set.facebookId = facebookId;
-
-          if (Object.keys($set).length > 1) {
-            await users.updateOne({ _id: user._id }, { $set });
-            user = { ...user, ...$set };
-          }
-        }
+        const user = await AuthService.upsertFromFacebook(profile);
         return done(null, user);
       } catch (err) {
         return done(err);

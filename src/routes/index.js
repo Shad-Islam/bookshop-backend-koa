@@ -1,5 +1,5 @@
 const Router = require("@koa/router");
-const booksRoutes = require("./books.routes");
+const booksRoutes = require("./books_routes");
 
 const router = new Router();
 
@@ -14,7 +14,7 @@ router.get("/health", (ctx) => {
   ctx.body = { ok: true, message: "API is healthy" };
 });
 
-const authRoutes = require("./auth.routes");
+const authRoutes = require("./auth_routes");
 router.use(authRoutes.routes()).use(authRoutes.allowedMethods());
 
 router.use(booksRoutes.routes()).use(booksRoutes.allowedMethods());

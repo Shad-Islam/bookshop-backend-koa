@@ -1,4 +1,3 @@
-const { default: mod } = require("koa");
 const { getCollection } = require("./db");
 
 async function ensureIndexes() {

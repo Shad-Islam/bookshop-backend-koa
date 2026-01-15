@@ -6,20 +6,18 @@ const koaSession = require("koa-session");
 const session = koaSession.default || koaSession;
 const passport = require("koa-passport");
 
+require("./config/passport");
+
 const routes = require("./routes");
 const { ensureIndexes } = require("./config/indexes");
 const { connectToDatabase, closeDatabase } = require("./config/db");
 
-require("./config/passport");
 
 const app = new Koa();
-
 app.keys = (process.env.SESSION_KEYS || "dev").split(" ");
-
 app.use(session({}, app));
 app.use(passport.initialize());
 app.use(passport.session());
-
 app.use(bodyParser());
 app.use(routes.routes()).use(routes.allowedMethods());
 
