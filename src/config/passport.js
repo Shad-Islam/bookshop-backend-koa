@@ -6,12 +6,11 @@ const GoogleStrategy = require("passport-google-oauth20").Strategy;
 const FacebookStrategy = require("passport-facebook").Strategy;
 
 const { ObjectId } = require("mongodb");
+
 const UsersRepo = require("../repositories/user_repo");
 const AuthService = require("../services/auth_service");
-
-function normalizeEmail(email) {
-  return (email || "").toString().trim().toLowerCase();
-}
+const AuthLinksRepo = require("../repositories/authlinks_repo");
+const { normalizeEmail } = require("../utils/normalize");
 
 // -----------------
 // Session support (optional)
@@ -44,20 +43,24 @@ passport.use(
     async (email, password, done) => {
       try {
         const normalizedEmail = normalizeEmail(email);
+        // find local auth link
+        const link = await AuthLinksRepo.findByProvider(
+          "local",
+          normalizedEmail
+        );
+        if (!link || !link.passwordHash) {
+          return done(null, false, { message: "Invalid email or password" });
+        }
 
-        let user = null;
+        const ok = await bcrypt.compare(password || "", link.passwordHash);
+        if (!ok) {
+          return done(null, false, { message: "Invalid email or password" });
+        }
 
-        user = await UsersRepo.findByEmail(normalizedEmail);
-        if (!user) return done(null, false, { message: "Invalid credentials" });
-
-        // Support a couple of common field names
-        const passwordHash = user.passwordHash || user.password_hash || null;
-        if (!passwordHash)
-          return done(null, false, { message: "Invalid credentials" });
-
-        const ok = await bcrypt.compare(password || "", passwordHash);
-        if (!ok) return done(null, false, { message: "Invalid credentials" });
-
+        const user = await UsersRepo.findById(link.userId);
+        if (!user) {
+          return done(null, false, { message: "Invalid email or password" });
+        }
         return done(null, user);
       } catch (err) {
         return done(err);

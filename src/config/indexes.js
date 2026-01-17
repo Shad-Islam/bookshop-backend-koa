@@ -17,6 +17,15 @@ async function ensureIndexes() {
     { facebookId: 1 },
     { unique: true, sparse: true }
   );
+  // authlinks collection
+
+  const authLinks = getCollection("authlinks");
+
+  await authLinks.createIndex(
+    { provider: 1, providerId: 1 },
+    { unique: true, sparse: true }
+  );
+  await authLinks.createIndex({ userId: 1, provider: 1 }, { unique: true });
 
   //   book collection
   const books = getCollection("books");
