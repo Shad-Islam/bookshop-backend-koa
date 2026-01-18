@@ -33,6 +33,11 @@ async function ensureIndexes() {
   await books.createIndex({ title: 1 });
   await books.createIndex({ createdAt: -1 });
   await books.createIndex({ isActive: 1 });
+
+  // favorites collection
+  const favorites = getCollection("favorites");
+  await favorites.createIndex({ userId: 1, bookId: 1 }, { unique: true });
+  await favorites.createIndex({ userId: 1, createdAt: -1 });
   console.log("✅ Indexes ensured");
 }
 
