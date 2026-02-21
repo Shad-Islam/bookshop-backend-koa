@@ -9,7 +9,6 @@ function booksCol() {
 async function addToFavorites({ userId, bookId }) {
   if (!ObjectId.isValid(bookId)) throw new Error("Invalid book id");
 
-  // (optional) book exists + active কিনা
   const book = await booksCol().findOne({
     _id: new ObjectId(bookId),
     isActive: { $ne: false },

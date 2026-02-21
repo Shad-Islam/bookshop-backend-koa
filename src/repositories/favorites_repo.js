@@ -5,8 +5,16 @@ function col() {
   return getCollection("favorites");
 }
 
+// function toObjectId(id) {
+//   return typeof id === "string" && ObjectId.isValid(id) ? new ObjectId(id) : id;
+// }
+
 function toObjectId(id) {
-  return typeof id === "string" && ObjectId.isValid(id) ? new ObjectId(id) : id;
+  if(id instanceof ObjectId) return id;
+  if(typeof id === "string" && ObjectId.isValid(id)) {
+    return new ObjectId(id);
+  }
+  throw new Error("Invalid ObjectId");
 }
 
 // Add favorite (duplicate avoid)
